@@ -1,99 +1,66 @@
-import mongoose from "mongoose";
-import { User } from "./models/User.js";
-import { Task } from "./models/Task.js";
-import { Note } from "./models/Note.js";
-import { Journal } from "./models/Journal.js";
+import express from "express";
+import fs from "fs";
+import path from "path";
+import { createServer as createViteServer, createLogger } from "vite";
+import viteConfig from "../vite.config.js";
+import { nanoid } from "nanoid";
 
-class MongoStorage {
-  async getUser(id) {
-    if (!mongoose.isValidObjectId(id)) return undefined;
-    return await User.findById(id).lean();
-  }
+const viteLogger = createLogger();
 
-  async getUserByUsername(username) {
-    return await User.findOne({ username }).lean();
-  }
-
-  async getUserByEmail(email) {
-    return await User.findOne({ email }).lean();
-  }
-
-  async createUser(insertUser) {
-    const doc = await User.create(insertUser);
-    return doc.toObject();
-  }
-
-  async getTasks(userId) {
-    return await Task.find({ userId }).sort({ createdAt: -1 }).lean();
-  }
-
-  async getTask(id) {
-    if (!mongoose.isValidObjectId(id)) return undefined;
-    return await Task.findById(id).lean();
-  }
-
-  async createTask(insertTask) {
-    const doc = await Task.create(insertTask);
-    return doc.toObject();
-  }
-
-  async updateTask(id, updates) {
-    if (!mongoose.isValidObjectId(id)) return undefined;
-    return await Task.findByIdAndUpdate(id, updates, { new: true }).lean();
-  }
-
-  async deleteTask(id) {
-    if (!mongoose.isValidObjectId(id)) return false;
-    const res = await Task.findByIdAndDelete(id);
-    return !!res;
-  }
-
-  async getNotes(userId) {
-    return await Note.find({ userId }).sort({ updatedAt: -1 }).lean();
-  }
-
-  async getNote(id) {
-    if (!mongoose.isValidObjectId(id)) return undefined;
-    return await Note.findById(id).lean();
-  }
-
-  async createNote(insertNote) {
-    const doc = await Note.create(insertNote);
-    return doc.toObject();
-  }
-
-  async updateNote(id, updates) {
-    if (!mongoose.isValidObjectId(id)) return undefined;
-    return await Note.findByIdAndUpdate(id, { ...updates, $set: { updatedAt: new Date() } }, { new: true }).lean();
-  }
-
-  async deleteNote(id) {
-    if (!mongoose.isValidObjectId(id)) return false;
-    const res = await Note.findByIdAndDelete(id);
-    return !!res;
-  }
-
-  async getJournals(userId) {
-    return await Journal.find({ userId }).sort({ date: -1 }).lean();
-  }
-
-  async getJournal(id) {
-    if (!mongoose.isValidObjectId(id)) return undefined;
-    return await Journal.findById(id).lean();
-  }
-
-  async createJournal(insertJournal) {
-    const doc = await Journal.create(insertJournal);
-    return doc.toObject();
-  }
-
-  async deleteJournal(id) {
-    if (!mongoose.isValidObjectId(id)) return false;
-    const res = await Journal.findByIdAndDelete(id);
-    return !!res;
-  }
+export function log(message, source = "express") {
+  const formattedTime = new Date().toLocaleTimeString("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: true,
+  });
+  console.log(`${formattedTime} [${source}] ${message}`);
 }
 
-export const storage = new MongoStorage();
+export async function setupVite(app, server) {
+  const serverOptions = { middlewareMode: true, hmr: { server }, allowedHosts: true };
+  const vite = await createViteServer({
+    ...viteConfig,
+    configFile: false,
+    customLogger: {
+      ...viteLogger,
+      error: (msg, options) => {
+        viteLogger.error(msg, options);
+        process.exit(1);
+      },
+    },
+    server: serverOptions,
+    appType: "custom",
+  });
+
+  app.use(vite.middlewares);
+  app.use("*", async (req, res, next) => {
+    const url = req.originalUrl;
+    try {
+      const clientTemplate = path.resolve(import.meta.dirname, "..", "frontend", "index.html");
+      let template = await fs.promises.readFile(clientTemplate, "utf-8");
+      template = template.replace(
+        `src="/src/main.jsx"`,
+        `src="/src/main.jsx?v=${nanoid()}"`,
+      );
+      const page = await vite.transformIndexHtml(url, template);
+      res.status(200).set({ "Content-Type": "text/html" }).end(page);
+    } catch (e) {
+      vite.ssrFixStacktrace(e);
+      next(e);
+    }
+  });
+}
+
+export function serveStatic(app) {
+  const distPath = path.resolve(import.meta.dirname, "public");
+  if (!fs.existsSync(distPath)) {
+    throw new Error(`Could not find the build directory: ${distPath}, make sure to build the client first`);
+  }
+  app.use(express.static(distPath));
+  app.use("*", (_req, res) => {
+    res.sendFile(path.resolve(distPath, "index.html"));
+  });
+}
 
 
