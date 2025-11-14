@@ -4,6 +4,8 @@ import { setupVite, serveStatic, log } from "./vite.js";
 import { connectMongo } from "./db.js";
 import 'dotenv/config'; // Loads .env file automatically
 
+
+
 const app = express();
 
 // Middleware to parse incoming requests
