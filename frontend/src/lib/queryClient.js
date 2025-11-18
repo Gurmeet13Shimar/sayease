@@ -1,19 +1,49 @@
 import { QueryClient } from "@tanstack/react-query";
 
-async function throwIfResNotOk(res) {
-  if (!res.ok) {
-    const text = (await res.text()) || res.statusText;
-    throw new Error(`${res.status}: ${text}`);
+// Safely parse any response body (JSON or plain text)
+async function parseBody(res) {
+  const text = await res.text();
+  if (!text) return null;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return text;
   }
+}
+
+// Prevent crashes from circular JSON or very large errors
+function safeMessage(input) {
+  try {
+    if (typeof input === "string") return input;
+    if (input && typeof input === "object") {
+      if (input.message) return input.message;
+      return JSON.stringify(input);
+    }
+    return String(input);
+  } catch {
+    return "<<unserializable response body>>";
+  }
+}
+
+async function throwIfResNotOk(res) {
+  if (res.ok) return;
+
+  const body = await parseBody(res);
+  let msg = safeMessage(body);
+
+  if (msg.length > 400) {
+    msg = msg.slice(0, 400) + "...(truncated)";
+  }
+
+  throw new Error(`${res.status}: ${msg || res.statusText}`);
 }
 
 export async function apiRequest(method, url, data) {
   const token = localStorage.getItem("accessToken");
-  const headers = data ? { "Content-Type": "application/json" } : {};
+  const headers = {};
 
-  if (token) {
-    headers["Authorization"] = `Bearer ${token}`;
-  }
+  if (data) headers["Content-Type"] = "application/json";
+  if (token) headers["Authorization"] = `Bearer ${token}`;
 
   const res = await fetch(url, {
     method,
@@ -23,7 +53,7 @@ export async function apiRequest(method, url, data) {
   });
 
   await throwIfResNotOk(res);
-  return res.json();
+  return parseBody(res);
 }
 
 export const getQueryFn = ({ on401: unauthorizedBehavior }) =>
@@ -31,11 +61,9 @@ export const getQueryFn = ({ on401: unauthorizedBehavior }) =>
     const token = localStorage.getItem("accessToken");
     const headers = {};
 
-    if (token) {
-      headers["Authorization"] = `Bearer ${token}`;
-    }
+    if (token) headers["Authorization"] = `Bearer ${token}`;
 
-    const res = await fetch(queryKey.join("/") , {
+    const res = await fetch(queryKey.join("/"), {
       headers,
       credentials: "include",
     });
@@ -45,7 +73,7 @@ export const getQueryFn = ({ on401: unauthorizedBehavior }) =>
     }
 
     await throwIfResNotOk(res);
-    return await res.json();
+    return parseBody(res);
   };
 
 export const queryClient = new QueryClient({
@@ -62,5 +90,3 @@ export const queryClient = new QueryClient({
     },
   },
 });
-
-
